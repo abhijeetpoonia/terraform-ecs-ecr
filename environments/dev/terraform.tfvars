@@ -1,4 +1,4 @@
-# terraform.tfvars - Corrected configuration for ap-south-1
+ 
 
 # Basic Configuration
 aws_region   = "ap-south-1"
