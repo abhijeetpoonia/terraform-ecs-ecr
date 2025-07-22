@@ -1,1 +1,19 @@
-
+{
+  "name": "champion-app",
+  "version": "1.0.0",
+  "description": "A simple app that prints 'Hey you are champion'",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "keywords": ["node", "express", "champion"],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
