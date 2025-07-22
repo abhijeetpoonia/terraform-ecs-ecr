@@ -1,4 +1,4 @@
-name: Build and Push to ECR
+name: Build and push to ECS
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
 env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: dev-my-app
-  ECS_SERVICE: test-app-service-opqgnbnk
+  ECS_SERVICE: test-app-service-aoc0wphd
   ECS_CLUSTER: my-app-dev-cluster
   CONTAINER_NAME: test-app
 
