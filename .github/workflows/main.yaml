@@ -1,0 +1,131 @@
+name: Build and Push to ECR
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: dev-my-app
+  ECS_SERVICE: test-app-service-opqgnbnk
+  ECS_CLUSTER: my-app-dev-cluster
+  CONTAINER_NAME: test-app
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image tagged as "latest"
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          # Define the image URI with latest tag
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+          docker build --no-cache -t $IMAGE_URI .
+          docker push $IMAGE_URI
+
+          # Set the image URI as output
+          echo "Setting output: image=$IMAGE_URI"
+          echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+          echo "Verifying GITHUB_OUTPUT file:"
+          cat $GITHUB_OUTPUT
+
+      - name: Delete all non-latest images
+        run: |
+          IMAGES_TO_DELETE=$(aws ecr list-images \
+            --repository-name $ECR_REPOSITORY \
+            --filter "tagStatus=TAGGED" \
+            --query 'imageIds[?imageTag!=`latest`]' \
+            --output json)
+
+          if [ "$IMAGES_TO_DELETE" != "[]" ]; then
+            echo "Deleting old images..."
+            echo $IMAGES_TO_DELETE | jq .
+            aws ecr batch-delete-image \
+              --repository-name $ECR_REPOSITORY \
+              --image-ids "$IMAGES_TO_DELETE"
+          else
+            echo "No old images to delete."
+          fi
+
+      - name: Get task definition name from service
+        id: get-task-def
+        run: |
+          TASK_DEFINITION=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          echo "task-definition-arn=$TASK_DEFINITION" >> $GITHUB_OUTPUT
+
+          # Extract just the task definition family name (without revision)
+          TASK_DEF_FAMILY=$(echo $TASK_DEFINITION | sed 's/.*\///' | sed 's/:.*$//')
+          echo "task-definition-family=$TASK_DEF_FAMILY" >> $GITHUB_OUTPUT
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ steps.get-task-def.outputs.task-definition-family }} \
+            --query taskDefinition > task-definition.json
+          echo "Task definition downloaded:"
+          cat task-definition.json
+
+      - name: Debug - Verify image output
+        run: |
+          echo "Image URI from build step: ${{ steps.build-image.outputs.image }}"
+          echo "Container name: ${{ env.CONTAINER_NAME }}"
+          echo "Task definition file exists: $(ls -la task-definition.json)"
+
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Debug - Show task definition content
+        run: |
+          echo "Original task definition:"
+          cat task-definition.json
+          echo ""
+          echo "=========================================="
+          echo "Updated task definition:"
+          cat ${{ steps.task-def.outputs.task-definition }}
+          echo ""
+          echo "=========================================="
+          echo "Image difference:"
+          echo "Old image: $(jq -r '.containerDefinitions[0].image' task-definition.json)"
+          echo "New image: $(jq -r '.containerDefinitions[0].image' ${{ steps.task-def.outputs.task-definition }})"
